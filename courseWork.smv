@@ -1,0 +1,78 @@
+-- User
+MODULE User(website)
+    VAR
+        state: { BEGINPROCESS, WAITING, REQUESTSITS, CHOOSESIT, INSERTEMAIL, CONFIRMATION, PAYFORTICKET, GETBILET, ENDPROCESS, BREAK };
+        sit: 0..3;
+    ASSIGN
+        init(state) := BEGINPROCESS;
+        next(state) := 
+            case
+                state = BEGINPROCESS : { BEGINPROCESS, REQUESTSITS };
+                state = REQUESTSITS & website.hasPlace : CHOOSESIT;
+                state = CHOOSESIT & website.state = PAYMENTREQURST: PAYFORTICKET;
+                state = CHOOSESIT: CHOOSESIT;
+                website.state = BRINGTICKET & state = PAYFORTICKET : GETBILET;
+                state = GETBILET : ENDPROCESS;
+                TRUE: BREAK;
+            esac;
+        init(sit) := { 0, 1, 2, 3 };
+        next(sit) :=
+            case
+                website.state = REQUEST_CHOOSE_SIT: { 0, 1, 2, 3 };
+                TRUE: sit;
+            esac;
+        JUSTICE
+            state != CHOOSESIT;
+
+-- Website
+MODULE WebSite(server, user)
+    VAR state: { BEGINPROCESS, WAITING, REQUEST_CHOOSE_SIT, STARTBUYING, EMAILREQUEST, WAITINGEMAILCONFIRMATION, PAYMENTREQURST, BRINGTICKET, ENDPROCESS, BREAK};
+    ASSIGN
+        init(state) := BEGINPROCESS;
+        next(state) :=
+            case
+                state = BEGINPROCESS : WAITING;
+                state = WAITING & user.state = REQUESTSITS: REQUEST_CHOOSE_SIT;
+                state = WAITING : WAITING;
+                state = REQUEST_CHOOSE_SIT & server.sits[user.sit] = FALSE : PAYMENTREQURST;
+                state = REQUEST_CHOOSE_SIT : REQUEST_CHOOSE_SIT;
+                state = PAYMENTREQURST & next(user.state) = PAYFORTICKET : BRINGTICKET;
+                state = BRINGTICKET : ENDPROCESS;
+                TRUE: BREAK;
+            esac;
+    DEFINE
+        hasPlace := server.countOfSits > 0;
+
+-- Server
+MODULE Server(website1, website2)
+VAR 
+    countOfSits: 1..10;
+    sits: array 0..3 of boolean;
+ASSIGN
+    init(countOfSits) := 10;
+    init(sits[0]) := FALSE;
+	init(sits[1]) := FALSE;
+	init(sits[2]) := FALSE;
+    init(sits[3]) := FALSE;
+    next(countOfSits) := 
+        case
+            (
+                website1.state = BRINGTICKET |
+                website2.state = BRINGTICKET
+            ) & countOfSits > 1 : countOfSits - 1;
+            TRUE: countOfSits;
+        esac;
+    next(sits[0]) := !sits[0] ? (website1.user.state = GETBILET & website1.user.sit = 0) | (website2.user.state = GETBILET & website2.user.sit = 0) : sits[0];
+    next(sits[1]) := !sits[1] ? (website1.user.state = GETBILET & website1.user.sit = 1) | (website2.user.state = GETBILET & website2.user.sit = 1) : sits[1];
+    next(sits[2]) := !sits[2] ? (website1.user.state = GETBILET & website1.user.sit = 2) | (website2.user.state = GETBILET & website2.user.sit = 2) : sits[2];
+    next(sits[3]) := !sits[3] ? (website1.user.state = GETBILET & website1.user.sit = 3) | (website2.user.state = GETBILET & website2.user.sit = 3) : sits[3];
+
+MODULE main
+    VAR
+        server: Server(webSite1, webSite2);
+        user1: User(webSite1);
+        user2: User(webSite2);
+        webSite1: WebSite(server, user1);
+        webSite2: WebSite(server, user2);
+    
+    SPEC AG(user1.state = ENDPROCESS & user2.state = ENDPROCESS);
