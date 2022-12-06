@@ -1,0 +1,159 @@
+-- User
+MODULE User(website)
+    VAR
+        state: { BEGINPROCESS, WAITING, REQUESTSITS, WAIT_FOR_EMAIL_REQUEST, INSERT_MAIL, WAIT_FOR_PAYMENT_REQUEST, PAYFORTICKET, GETBILET, ENDPROCESS, BREAK };
+        sit: 0..3;
+    ASSIGN
+        init(state) := BEGINPROCESS;
+        next(state) := 
+            case
+                -- Начало работы пользователя
+                state = BEGINPROCESS : { BEGINPROCESS, REQUESTSITS };
+
+                -- Ищем свободное место
+                state = REQUESTSITS & website.hasPlace : WAIT_FOR_EMAIL_REQUEST;
+                state = REQUESTSITS & website.hasPlace = FALSE : ENDPROCESS;
+
+                -- Ждем запрос на email
+                state = WAIT_FOR_EMAIL_REQUEST & website.state = EMAILREQUEST: INSERT_MAIL;
+                state = WAIT_FOR_EMAIL_REQUEST : WAIT_FOR_EMAIL_REQUEST;
+
+                -- Пишем email и ждем подтверждение 
+                state = INSERT_MAIL & website.state = CONFIRM_EMAIL : WAIT_FOR_PAYMENT_REQUEST;
+                state = INSERT_MAIL & website.state = REJECT_EMAIL : ENDPROCESS;
+                state = INSERT_MAIL : INSERT_MAIL;
+
+                -- Ждем запрос на оплату билету 
+                state = WAIT_FOR_PAYMENT_REQUEST & website.state = PAYMENTREQURST : PAYFORTICKET;
+                state = WAIT_FOR_PAYMENT_REQUEST : WAIT_FOR_PAYMENT_REQUEST;
+
+                -- Смотрим прошла ли оплата или нет 
+                state = PAYFORTICKET & website.state = BRINGTICKET : GETBILET;
+                state = PAYFORTICKET & website.state = REJECT_PAYMENT : ENDPROCESS;
+                state = PAYFORTICKET : PAYFORTICKET;
+
+                -- Забираем билет
+                state = GETBILET : ENDPROCESS;
+                TRUE: BREAK;
+            esac;
+        init(sit) := { 0, 1, 2, 3 };
+        next(sit) :=
+            case
+                website.state = REQUEST_CHOOSE_SIT: { 0, 1, 2, 3 };
+                TRUE: sit;
+            esac;
+        JUSTICE
+            state != WAIT_FOR_EMAIL_REQUEST;
+
+-- Website
+MODULE WebSite(server, user)
+    VAR state: { BEGINPROCESS, WAITING, REQUEST_CHOOSE_SIT, EMAILREQUEST, CONFIRM_EMAIL, REJECT_EMAIL, PAYMENTREQURST, BRINGTICKET, REJECT_PAYMENT, ENDPROCESS, BREAK};
+    ASSIGN
+        init(state) := BEGINPROCESS;
+        next(state) :=
+            case
+                -- Ждем пока пользователь начнет выбирать место 
+                state = BEGINPROCESS : WAITING;
+                state = WAITING & user.state = REQUESTSITS: REQUEST_CHOOSE_SIT;
+                state = WAITING : WAITING;
+
+                -- Выбрал место и место свободно
+                state = REQUEST_CHOOSE_SIT & server.sits[user.sit] = FALSE : EMAILREQUEST;
+                state = REQUEST_CHOOSE_SIT : REQUEST_CHOOSE_SIT;
+
+                -- Ждем пока введет почту
+                state = EMAILREQUEST & user.state = INSERT_MAIL : {CONFIRM_EMAIL, REJECT_EMAIL};
+                state = EMAILREQUEST : EMAILREQUEST;
+
+                -- Ввел почту корректно или нет
+                state = CONFIRM_EMAIL & user.state = WAIT_FOR_PAYMENT_REQUEST : PAYMENTREQURST;
+                state = CONFIRM_EMAIL : CONFIRM_EMAIL;
+                state = REJECT_EMAIL: ENDPROCESS;
+
+                -- Оплата прошла или не прошла
+                state = PAYMENTREQURST & next(user.state) = PAYFORTICKET : {BRINGTICKET, REJECT_PAYMENT};       
+                state = PAYMENTREQURST: PAYMENTREQURST; 
+                state = BRINGTICKET | state = REJECT_EMAIL : ENDPROCESS;
+                TRUE: BREAK;
+            esac;
+    DEFINE
+        hasPlace := server.countOfSits > 0;
+
+-- Server
+MODULE Server(website1, website2)
+VAR 
+    countOfSits: 1..4;
+    sits: array 0..3 of boolean;
+ASSIGN
+    init(countOfSits) := 4;
+    init(sits[0]) := FALSE;
+	init(sits[1]) := FALSE;
+	init(sits[2]) := FALSE;
+    init(sits[3]) := FALSE;
+    next(countOfSits) := 
+        case
+            (
+                website1.state = BRINGTICKET |
+                website2.state = BRINGTICKET
+            ) & countOfSits > 1 : countOfSits - 1;
+            TRUE: countOfSits;
+        esac;
+    next(sits[0]) := !sits[0] ? (website1.user.state = GETBILET & website1.user.sit = 0) | (website2.user.state = GETBILET & website2.user.sit = 0) : sits[0];
+    next(sits[1]) := !sits[1] ? (website1.user.state = GETBILET & website1.user.sit = 1) | (website2.user.state = GETBILET & website2.user.sit = 1) : sits[1];
+    next(sits[2]) := !sits[2] ? (website1.user.state = GETBILET & website1.user.sit = 2) | (website2.user.state = GETBILET & website2.user.sit = 2) : sits[2];
+    next(sits[3]) := !sits[3] ? (website1.user.state = GETBILET & website1.user.sit = 3) | (website2.user.state = GETBILET & website2.user.sit = 3) : sits[3];
+
+MODULE main
+    VAR
+        server: Server(webSite1, webSite2);
+        user1: User(webSite1);
+        user2: User(webSite2);
+        webSite1: WebSite(server, user1);
+        webSite2: WebSite(server, user2);
+    
+    -- SPEC AG(user1.state = ENDPROCESS & user2.state = ENDPROCESS);
+
+    -- При заказе пользователь может выбрать свободное место, то есть нельзя выбрать занятое;
+    SPEC AG(
+        webSite1.state = REQUEST_CHOOSE_SIT 
+        & (
+            (webSite1.user.sit = 0 & server.sits[0] = TRUE) |
+            (webSite1.user.sit = 1 & server.sits[1] = TRUE) |
+            (webSite1.user.sit = 2 & server.sits[2] = TRUE) |
+            (webSite1.user.sit = 3 & server.sits[3] = TRUE)
+        )
+    ) -> AX (webSite1.state = ENDPROCESS);
+
+    SPEC AG(
+        webSite2.state = REQUEST_CHOOSE_SIT 
+        & (
+            (webSite2.user.sit = 0 & server.sits[0] = TRUE) |
+            (webSite2.user.sit = 1 & server.sits[1] = TRUE) |
+            (webSite2.user.sit = 2 & server.sits[2] = TRUE) |
+            (webSite2.user.sit = 3 & server.sits[3] = TRUE)
+        )
+    ) -> AX (webSite2.state = ENDPROCESS);
+
+    -- Если пользователей меньше, чем билетов, то наступит состояние, когда количество покупок будет всегда равно количеству пользователей;
+    SPEC AG (user1.state = ENDPROCESS | user2.state = ENDPROCESS) -> AX (server.countOfSits > 1);
+
+    -- Если адрес электронной почты не был введен, то нельзя перейти к процессу оплаты;
+    SPEC AG (webSite1.state = EMAILREQUEST & user1.state != INSERT_MAIL) -> AX (webSite1.state = EMAILREQUEST);
+    SPEC AG (webSite2.state = EMAILREQUEST & user1.state != INSERT_MAIL) -> AX (webSite2.state = EMAILREQUEST);
+
+    -- Если в театре есть свободные места, то пользователь точно его может выбрать;
+    SPEC AG ((server.sits[0] = FALSE | server.sits[1] = FALSE | server.sits[2] = FALSE | server.sits[3] = FALSE) & (user1.state = REQUESTSITS | user2.state = REQUESTSITS)) -> AF (webSite1.state = REQUEST_CHOOSE_SIT | webSite2.state = REQUEST_CHOOSE_SIT);
+
+    -- Когда пользователь купил билет, он завершает сессию;
+
+    SPEC AG (user1.state = GETBILET) -> AG (user1.state = ENDPROCESS);
+    SPEC AG (user2.state = GETBILET) -> AG (user2.state = ENDPROCESS);
+
+    -- -- Когда билеты проданы, сервер завершает сессию;
+
+    SPEC AG (user1.state = REQUESTSITS & webSite1.hasPlace = FALSE) -> AX (user1.state = ENDPROCESS);
+    SPEC AG (user2.state = REQUESTSITS & webSite2.hasPlace = FALSE) -> AX (user2.state = ENDPROCESS);
+
+    -- -- Если сайт не получил подтверждение электронной почты, то он либо завершает работу, либо ожидает следующего запроса;
+    SPEC AG (webSite1.state = REJECT_EMAIL) -> AX (webSite1.state = ENDPROCESS);
+    SPEC AG (webSite2.state = REJECT_EMAIL) -> AX (webSite2.state = ENDPROCESS);
